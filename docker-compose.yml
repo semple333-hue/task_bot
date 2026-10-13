@@ -1,0 +1,58 @@
+# ============================================================
+# @UPRiTRM_task_bot — Этап 1
+#
+# ВАЖНО (фикс ошибки macOS Docker Desktop / VirtioFS):
+#   "create mountpoint for /app/secrets/credentials.json mount:
+#    mountpoint is outside of rootfs"
+#   Причина: нельзя монтировать ОДИНОЧНЫЙ файл (.env, credentials.json)
+#   внутрь каталога, который уже целиком занят bind-монтированием ".:/app".
+#   Решение: единственный том — ".:/app". И .env, и credentials.json просто
+#   лежат в корне проекта и попадают в контейнер как /app/.env и
+#   /app/credentials.json в составе этого тома.
+#
+# Запуск:  cp .env.example .env  (заполнить) ;  положить credentials.json в
+#          корень проекта ;  docker compose up --build
+# Останов: docker compose down
+# ============================================================
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: uprirm-task-bot:stage1
+    container_name: uprirm_task_bot
+    restart: unless-stopped
+
+    environment:
+      # Путь к .env внутри контейнера = корень смонтированного тома .:/app
+      ENV_FILE: /app/.env
+      # Service Account ключ лежит в корне проекта -> /app/credentials.json.
+      # Относительный путь "credentials.json" тоже работает, т.к. working_dir=/app.
+      CREDENTIALS_FILE_PATH: ${CREDENTIALS_FILE_PATH:-credentials.json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Europe/Moscow}
+
+    volumes:
+      # ЕДИНСТВЕННЫЙ том: весь проект (код, .env, credentials.json) в /app.
+      # Hot reload без пересборки образа; отдельных file-mounts нет —
+      # именно они ломали старт контейнера на macOS/VirtioFS.
+      - .:/app
+
+    working_dir: /app
+    command: ["python", "-m", "src.main"]
+
+    networks:
+      - uprirm
+
+    # Живость = возможность открыть таблицу и подтвердить схему.
+    # Запускается из /app (working_dir), где лежат пакет src и credentials.json.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import asyncio; from src.config import get_settings; from src.services.sheets import SheetsService; asyncio.run(SheetsService(get_settings()).ping())"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+networks:
+  uprirm:
+    driver: bridge
